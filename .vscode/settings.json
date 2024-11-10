@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "fcntl.h": "c",
-        "errno.h": "c"
+        "errno.h": "c",
+        "tcp.h": "c",
+        "stdlib.h": "c"
     }
 }

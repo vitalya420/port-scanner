@@ -6,6 +6,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <sys/select.h>
+#include <time.h>
+
+
+
+#include "ip.h"
+#include "tcp.h"
 
 // Forward declare the struct first
 struct event {
@@ -142,23 +148,87 @@ void event_loop(int socks_amount, int sockets[], struct event* stop_event) {
     }
 }
 
-int main(int argc, char** argv) {
-    if (getuid() != 0) {
-        fprintf(stderr, "This program requires root privileges to create raw sockets\n");
-        return EXIT_FAILURE;
+// int main(int argc, char** argv) {
+//     if (getuid() != 0) {
+//         fprintf(stderr, "This program requires root privileges to create raw sockets\n");
+//         return EXIT_FAILURE;
+//     }
+
+//     int* sockets = create_raw_sockets(10);
+//     if (sockets == NULL) {
+//         return EXIT_FAILURE;
+//     }
+
+//     struct event stop_event = {0};
+
+//     printf("Starting event loop. Press Ctrl+C to stop.\n");
+//     event_loop(10, sockets, &stop_event);
+
+//     close_sockets(sockets, 10);
+//     free(sockets);
+//     return EXIT_SUCCESS;
+// }
+
+int main() {
+    const char* src_ip = "192.168.0.117";
+    const char* dst_ip = "8.8.8.8";
+    uint16_t src_port = 12345;
+    uint32_t seq_num = 1000;
+    uint32_t ack_num = 0;
+    uint8_t flags = TCP_SYN;
+
+    // Create a raw socket
+    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    if (sockfd < 0) {
+        perror("Failed to create raw socket");
+        exit(EXIT_FAILURE);
     }
 
-    int* sockets = create_raw_sockets(10);
-    if (sockets == NULL) {
-        return EXIT_FAILURE;
+    // Increase socket send buffer size
+    int buffer_size = 512 * 1024; // Set to 512 KB
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size)) < 0) {
+        perror("Failed to set socket send buffer size");
     }
 
-    struct event stop_event = {0};
+    // Timing
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 
-    printf("Starting event loop. Press Ctrl+C to stop.\n");
-    event_loop(10, sockets, &stop_event);
+    // Send packets to each port in range
+    for (uint16_t dst_port = 1; dst_port < 65535; dst_port++) {
+        // Create TCP packet for the current destination port
+        struct tcp_packet packet = create_tcp_packet(src_ip, dst_ip, src_port, dst_port, seq_num, ack_num, flags, NULL, 0);
+        size_t packet_size;
+        uint8_t* packet_bytes = tcp_packet_to_bytes(&packet, &packet_size);
 
-    close_sockets(sockets, 10);
-    free(sockets);
-    return EXIT_SUCCESS;
+        if (!packet_bytes) {
+            fprintf(stderr, "Failed to convert packet to bytes\n");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+
+        // Prepare destination address
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(dst_port);
+        inet_pton(AF_INET, dst_ip, &dest_addr.sin_addr);
+
+        // Send the packet
+        if (sendto(sockfd, packet_bytes, packet_size, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr)) < 0) {
+            perror("Failed to send packet");
+        }
+
+        free(packet_bytes);
+    }
+
+    // End timing
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    double elapsed_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("Elapsed time for sending packets to 65535 ports: %.3f seconds\n", elapsed_time);
+
+    // Cleanup
+    close(sockfd);
+
+    return 0;
 }
